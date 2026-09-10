@@ -79,6 +79,14 @@ bun run clean      # remove dist/
 ## Project layout
 
 ```
+deploy/
+├── .env.example                 # All deployment variables, documented
+└── nginx/
+    └── site.conf.template       # Host nginx block, rendered from DOMAIN
+scripts/
+├── docker-build-push.sh         # Build and publish the image
+├── setup-nginx.sh               # Install the reverse proxy and TLS
+└── deploy.sh                    # Pull and restart on the server
 src/
 ├── App.tsx                  # Root component and tournament state machine
 ├── main.tsx                 # Entry point
@@ -121,6 +129,7 @@ nginx is configured with SPA history fallback, gzip, and immutable caching on ha
 | Build the image and publish it to Docker Hub | [Quick path](#quick-path) / [Manual path](#manual-path) below |
 | Run the app on a server, pulling a published image | [Running from Docker Hub only](#running-from-docker-hub-only), or [with Docker Compose](#using-docker-compose-instead) |
 | Set up a fresh Ubuntu box, or build on the server itself | [Setting up an Ubuntu host](#setting-up-an-ubuntu-host) |
+| Serve it at a real domain over HTTPS | [Serving it at a domain with HTTPS](#serving-it-at-a-domain-with-https) |
 
 ### Quick path
 
@@ -484,6 +493,49 @@ docker compose up -d
 | `IMAGE` | `yourname/sphero-tournament` | Docker Hub repository |
 | `TAG` | `latest` | Image tag; pin a real version in production |
 | `HOST_PORT` | `8080` | Port on the host |
+| `HOST_BIND` | `0.0.0.0` | Interface to bind; set to `127.0.0.1` behind a reverse proxy |
+| `PLATFORM` | `linux/amd64` | Image platform; the published image is amd64 only |
+
+### Deployment files
+
+Everything a server needs lives in these four files:
+
+| File | Purpose |
+|---|---|
+| [`docker-compose.yml`](docker-compose.yml) | Runs the published image; reads `IMAGE`, `TAG`, `HOST_PORT`, `HOST_BIND`, `PLATFORM` |
+| [`deploy/.env.example`](deploy/.env.example) | Template for those variables — `cp deploy/.env.example .env` |
+| [`deploy/nginx/site.conf.template`](deploy/nginx/site.conf.template) | Host nginx server block, rendered with `DOMAIN` from `.env` |
+| [`scripts/setup-nginx.sh`](scripts/setup-nginx.sh) | Installs the proxy and, with `--tls`, the certificate |
+| [`scripts/deploy.sh`](scripts/deploy.sh) | Pull a new image and restart, with a health check |
+
+All of them are driven by one `.env`, copied from [`deploy/.env.example`](deploy/.env.example):
+
+| Variable | Default | Used by | Meaning |
+|---|---|---|---|
+| `DOMAIN` | — | `setup-nginx.sh` | Hostname the app is served at, e.g. `sphero.dannyslab.com` |
+| `LETSENCRYPT_EMAIL` | — | `setup-nginx.sh` | Address for certificate expiry warnings |
+| `IMAGE` | `gualix/sphero-tournament` | Compose | Docker Hub repository |
+| `TAG` | `latest` | Compose | Image tag; pin a real version in production |
+| `HOST_PORT` | `8080` | Compose, `setup-nginx.sh` | Port the container publishes on the host |
+| `HOST_BIND` | `0.0.0.0` | Compose | Set to `127.0.0.1` behind the proxy |
+| `PLATFORM` | `linux/amd64` | Compose | Image platform; published image is amd64 only |
+
+A pull-only host needs no source checkout — `docker-compose.yml` and `.env` are enough, plus the nginx file if you are terminating TLS.
+
+### Redeploying
+
+```bash
+./scripts/deploy.sh              # deploy whatever TAG is in .env
+./scripts/deploy.sh v1.2.0       # deploy a specific tag
+```
+
+It prints what is running, pulls, recreates the container only if the image actually changed, then curls the app to confirm it came back. An explicit tag argument overrides `.env`.
+
+The equivalent by hand is `docker compose pull && docker compose up -d`.
+
+### A note on `PLATFORM`
+
+The published image is `linux/amd64` only, so `docker-compose.yml` pins `platform: ${PLATFORM:-linux/amd64}`. On an amd64 server that changes nothing. On an arm64 machine — an Apple Silicon Mac testing the Compose setup — it is what allows the image to pull and run at all, under emulation; without it Docker reports `no matching manifest for linux/arm64`.
 
 ### Compose commands
 
@@ -511,6 +563,234 @@ docker stop sphero-tournament             # stop, keep the container
 docker rm -f sphero-tournament            # remove entirely
 docker exec -it sphero-tournament sh      # shell inside the container
 ```
+
+---
+
+## Serving it at a domain with HTTPS
+
+Running the container publishes the app on a raw port — `http://<server-ip>:8080`. To reach it at `https://sphero.dannyslab.com` instead, put nginx on the host in front of the container and terminate TLS there.
+
+```
+browser ──443/TLS──► host nginx ──HTTP──► 127.0.0.1:8080 ──► container nginx ──► static files
+```
+
+Two separate nginx instances, doing different jobs. The one **inside** the image serves the built files and handles SPA routing; you do not touch it. The one on the **host** owns the domain, the certificate, and ports 80 and 443. Nothing about the image or the Compose file changes except which interface the container binds to.
+
+### 1. Configure DNS for the subdomain
+
+The app is served at a subdomain of a zone you already own — `sphero.dannyslab.com` on `dannyslab.com`. Nothing needs to be registered or bought; a subdomain is a single record inside the parent zone.
+
+Get the server's public address, run **on the server**:
+
+```bash
+curl -4 -s ifconfig.me
+```
+
+Then in whichever DNS panel is authoritative for `dannyslab.com` — the registrar, or Cloudflare/Route 53 if the nameservers were delegated there — add one record:
+
+| Field | Value |
+|---|---|
+| **Type** | `A` |
+| **Name** | `sphero` |
+| **Value** / Points to | the IPv4 from above |
+| **TTL** | `300` (5 minutes) |
+| **Proxy** (Cloudflare only) | **DNS only** — grey cloud |
+
+Three things that commonly go wrong:
+
+**The Name field.** Enter only the label — `sphero` — not the full hostname. Almost every panel appends the zone automatically, so typing `sphero.dannyslab.com` there produces `sphero.dannyslab.com.dannyslab.com`. A few panels want the FQDN instead; if yours shows the resulting name as you type, trust that preview.
+
+**`A`, not `CNAME`.** A `CNAME` would point at another *name*; you are pointing at an *address*. Use `AAAA` in addition if the server has public IPv6 — and only if it does, since a published `AAAA` that does not answer makes the site intermittently unreachable for IPv6 clients.
+
+**TTL 300.** A low TTL means a mistake costs five minutes rather than a day. Raise it later once things are stable.
+
+Verify from your own machine, not the server:
+
+```bash
+dig +short sphero.dannyslab.com
+```
+
+That must print the server's public IP before you continue. Certificate issuance validates over this hostname, so everything downstream depends on it resolving correctly. Propagation is usually seconds to a few minutes at TTL 300; if `dig` returns nothing after ten, re-check the record's Name field.
+
+If `dannyslab.com` is on Cloudflare, leave the record **DNS only** (grey cloud) until the certificate is issued — the orange-cloud proxy intercepts the HTTP validation request and certbot fails. Re-enable proxying afterwards if you want it.
+
+Finally, record the hostname in `.env`, where the setup script reads it from:
+
+```
+DOMAIN=sphero.dannyslab.com
+```
+
+### Serving a different subdomain
+
+Nothing above is specific to `sphero`. To serve `tournament.dannyslab.com` instead, create that record and set `DOMAIN=tournament.dannyslab.com` in `.env` — the nginx server block is rendered from a template, so no configuration file needs editing.
+
+### 2. Bind the container to localhost
+
+With a proxy in front, the container should no longer be reachable from outside. Otherwise `http://<server-ip>:8080` keeps serving the app unencrypted, bypassing everything you are about to set up.
+
+```bash
+HOST_BIND=127.0.0.1 IMAGE=gualix/sphero-tournament docker compose up -d
+```
+
+Or copy the ready-made template, which documents every variable:
+
+```bash
+cp deploy/.env.example .env
+```
+
+Confirm the binding changed:
+
+```bash
+docker compose ps --format 'table {{.Name}}\t{{.Ports}}'
+# want:  127.0.0.1:8080->80/tcp
+# not:   0.0.0.0:8080->80/tcp
+```
+
+Running with plain `docker run` instead of Compose, the equivalent is `-p 127.0.0.1:8080:80`.
+
+### 3. Run the nginx setup
+
+With `DOMAIN` set in `.env` and the record resolving, one command does the rest:
+
+```bash
+sudo ./scripts/setup-nginx.sh
+```
+
+It installs nginx if missing, renders [`deploy/nginx/site.conf.template`](deploy/nginx/site.conf.template) with your `DOMAIN` and `HOST_PORT`, enables the site, removes the default one, runs `nginx -t`, reloads, and opens 80/443 in `ufw` while closing the container's port.
+
+Before touching anything it checks that `DOMAIN` resolves to this server and that `HOST_BIND` is `127.0.0.1`, warning rather than failing so you can see both problems at once.
+
+Confirm plain HTTP works:
+
+```bash
+curl -I http://sphero.dannyslab.com
+```
+
+A `200` means DNS, firewall, nginx, and the container are all correct. Fix any failure here before requesting a certificate — issuance validates over exactly this path.
+
+### 4. Add TLS
+
+```bash
+sudo ./scripts/setup-nginx.sh --tls
+```
+
+This installs certbot, obtains a Let's Encrypt certificate for `DOMAIN`, lets certbot add the TLS server block and the HTTP→HTTPS redirect, and then runs `certbot renew --dry-run` to prove renewal works.
+
+Set `LETSENCRYPT_EMAIL` in `.env` first. Without it certbot registers anonymously and you get no warning if renewal ever breaks — which surfaces as an expired site 90 days later.
+
+Re-running the script is safe. Once a config has a `listen 443` block, it is left alone rather than regenerated, so certbot's work is never overwritten.
+
+Verify:
+
+```bash
+curl -I https://sphero.dannyslab.com          # 200
+curl -I http://sphero.dannyslab.com           # 301 to https
+```
+
+Then open `https://sphero.dannyslab.com` and check the padlock.
+
+### Doing it by hand instead
+
+The script does nothing exotic. The equivalent steps:
+
+```bash
+sudo apt-get install -y nginx
+
+sudo sed -e 's/__DOMAIN__/sphero.dannyslab.com/g' \
+         -e 's|__UPSTREAM__|127.0.0.1:8080|g' \
+         deploy/nginx/site.conf.template \
+  > /etc/nginx/sites-available/sphero.dannyslab.com
+
+sudo ln -sfn /etc/nginx/sites-available/sphero.dannyslab.com /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+
+sudo nginx -t && sudo systemctl reload nginx
+
+sudo ufw allow 'Nginx Full'
+sudo ufw delete allow 8080/tcp
+
+sudo apt-get install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d sphero.dannyslab.com
+```
+
+Always `nginx -t` before reloading. An error caught there is harmless; the same error found during a reload takes the site down.
+
+### What certbot leaves you with
+
+Certbot rewrites the file to roughly this:
+
+```nginx
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name sphero.dannyslab.com;
+
+    ssl_certificate     /etc/letsencrypt/live/sphero.dannyslab.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/sphero.dannyslab.com/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+    }
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name sphero.dannyslab.com;
+    return 301 https://$host$request_uri;
+}
+```
+
+Verify:
+
+```bash
+curl -I https://sphero.dannyslab.com          # 200
+curl -I http://sphero.dannyslab.com           # 301 to https
+```
+
+Then open `https://sphero.dannyslab.com` and confirm the padlock.
+
+### Renewal
+
+The certbot package installs a systemd timer that renews automatically, roughly 30 days before expiry. Confirm it is active and that renewal actually works:
+
+```bash
+systemctl list-timers | grep certbot
+sudo certbot renew --dry-run
+```
+
+The dry run exercises the full renewal against Let's Encrypt's staging environment without touching your real certificate. If it passes, renewal is genuinely automatic and there is nothing to remember. Let's Encrypt certificates last 90 days, so a silent failure surfaces as an expired site — the dry run is what tells you in advance.
+
+### Updating the app afterwards
+
+The proxy and certificate are independent of the container. Updating stays exactly the same:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+nginx keeps proxying to `127.0.0.1:8080` throughout. There is no need to touch the certificate or reload nginx.
+
+### Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| `502 Bad Gateway` | Container is not running, or not on `127.0.0.1:8080`. Check `docker compose ps`. |
+| Certbot fails to validate | DNS not resolving yet, port 80 closed, or Cloudflare proxying is on. |
+| Site works on IP:8080 but not the domain | DNS has not propagated, or `server_name` does not match. |
+| Still reachable on `:8080` | `HOST_BIND` was not applied — recreate the container, mappings are fixed at creation. |
+| `nginx -t` fails after editing | Fix before reloading; the running config stays live until a successful reload. |
 
 ---
 
