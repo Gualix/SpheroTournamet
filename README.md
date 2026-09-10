@@ -119,7 +119,7 @@ nginx is configured with SPA history fallback, gzip, and immutable caching on ha
 | You want to | Go to |
 |---|---|
 | Build the image and publish it to Docker Hub | [Quick path](#quick-path) / [Manual path](#manual-path) below |
-| Run the app on a server, pulling a published image | [Running from Docker Hub only](#running-from-docker-hub-only) |
+| Run the app on a server, pulling a published image | [Running from Docker Hub only](#running-from-docker-hub-only), or [with Docker Compose](#using-docker-compose-instead) |
 | Set up a fresh Ubuntu box, or build on the server itself | [Setting up an Ubuntu host](#setting-up-an-ubuntu-host) |
 
 ### Quick path
@@ -428,6 +428,55 @@ docker rm -f sphero-tournament
 docker run -d --name sphero-tournament --restart unless-stopped -p 8080:80 \
   yourname/sphero-tournament:<previous-tag>
 ```
+
+### Using Docker Compose instead
+
+[`docker-compose.yml`](docker-compose.yml) wraps the same image, keeping the port and restart policy in a file rather than in shell history. It is the more convenient option for a machine you will come back to.
+
+The file is self-contained — on a pull-only host it is the **only** thing you need from this repository:
+
+```bash
+curl -O https://raw.githubusercontent.com/Gualix/SpheroTournamet/main/docker-compose.yml
+```
+
+Point it at your image and start it:
+
+```bash
+IMAGE=yourname/sphero-tournament docker compose up -d
+```
+
+Or write the settings once into a `.env` file beside it, which Compose reads automatically:
+
+```bash
+cat > .env <<'EOF'
+IMAGE=yourname/sphero-tournament
+TAG=v1.0.0
+HOST_PORT=8080
+EOF
+
+docker compose up -d
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `IMAGE` | `yourname/sphero-tournament` | Docker Hub repository |
+| `TAG` | `latest` | Image tag; pin a real version in production |
+| `HOST_PORT` | `8080` | Port on the host |
+
+### Compose commands
+
+```bash
+docker compose up -d          # start
+docker compose ps             # status, including the image's healthcheck
+docker compose logs -f        # follow nginx logs
+docker compose pull           # fetch a newer image
+docker compose up -d          # recreate with whatever was just pulled
+docker compose down           # stop and remove
+```
+
+Updating is the two-step `pull` then `up -d`. Compose notices the image changed and recreates the container; without the `pull` it will happily keep running the old one.
+
+To build from source rather than pull, uncomment `build: .` in the file and run `docker compose up -d --build`. That needs the full repository checked out, not just the Compose file.
 
 ### Useful commands
 

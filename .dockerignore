@@ -12,3 +12,4 @@ coverage
 Dockerfile
 .dockerignore
 scripts/docker-build-push.sh
+docker-compose.yml
