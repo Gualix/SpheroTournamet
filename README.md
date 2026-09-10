@@ -114,6 +114,14 @@ The build stage is pinned to `--platform=$BUILDPLATFORM`, so the bundle compiles
 
 nginx is configured with SPA history fallback, gzip, and immutable caching on hashed `/assets` files.
 
+**Which path do you need?**
+
+| You want to | Go to |
+|---|---|
+| Build the image and publish it to Docker Hub | [Quick path](#quick-path) / [Manual path](#manual-path) below |
+| Run the app on a server, pulling a published image | [Running from Docker Hub only](#running-from-docker-hub-only) |
+| Set up a fresh Ubuntu box, or build on the server itself | [Setting up an Ubuntu host](#setting-up-an-ubuntu-host) |
+
 ### Quick path
 
 ```bash
@@ -188,21 +196,11 @@ docker buildx build \
 
 `--load` and `--push` cannot be combined in a single buildx invocation, which is why building and pushing are separate commands. Layers are cached from step 3, so the push is mostly upload time.
 
-### Deploy on an x86 Linux host
+### Deploying what you pushed
 
-```bash
-docker pull yourname/sphero-tournament:latest
+Once the image is on Docker Hub, the target machine needs nothing from this repository — see [Running from Docker Hub only](#running-from-docker-hub-only).
 
-docker run -d \
-  --name sphero-tournament \
-  --restart unless-stopped \
-  -p 8080:80 \
-  yourname/sphero-tournament:latest
-```
-
-The app is then on port 8080. The image declares a healthcheck, so `docker ps` reports container health once the first probe completes.
-
-On a host that does not have Docker yet, start with [Setting up an Ubuntu host](#setting-up-an-ubuntu-host) below.
+On a host without Docker installed yet, start with [Setting up an Ubuntu host](#setting-up-an-ubuntu-host).
 
 ---
 
@@ -330,6 +328,116 @@ If `curl` on the host returns 200 but a browser elsewhere cannot connect, Docker
 ### Build on the host, or pull from Docker Hub?
 
 Building on the host means you never push or pull — clone, build, run. Pulling a prebuilt image is the better choice when you want the identical verified artifact across several machines, or when the server is too small to run `bun install` comfortably.
+
+---
+
+## Running from Docker Hub only
+
+The simplest deployment. The machine never sees this repository — no `git clone`, no `Dockerfile`, no Node or Bun, no build. It pulls a finished image and runs it.
+
+Everything the app needs is already inside the image: the compiled bundle and the nginx that serves it.
+
+### Requirements
+
+Docker, and nothing else. If the host does not have it, follow [Install Docker](#1-install-docker) and [Post-install](#2-post-install) above, then stop — skip the clone and build steps entirely.
+
+### 1. Pull the image
+
+```bash
+docker pull yourname/sphero-tournament:latest
+```
+
+If the Docker Hub repository is private, authenticate first:
+
+```bash
+docker login -u yourname
+```
+
+Public repositories need no login at all.
+
+### 2. Run it
+
+```bash
+docker run -d \
+  --name sphero-tournament \
+  --restart unless-stopped \
+  -p 8080:80 \
+  yourname/sphero-tournament:latest
+```
+
+`--restart unless-stopped` brings the app back automatically after a reboot or a crash.
+
+### 3. Verify
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+```
+
+The `PORTS` column should read `0.0.0.0:8080->80/tcp`. An empty column means the container is running but unreachable — see [Ports](#ports).
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/    # expect 200
+```
+
+Then open `http://<server-ip>:8080` from any machine on the network. Allow the port if a firewall is active:
+
+```bash
+sudo ufw allow 8080/tcp
+```
+
+### Pin a version in production
+
+`:latest` is a moving target — whatever was pushed most recently. For anything you care about keeping stable, pull a specific tag instead:
+
+```bash
+docker pull yourname/sphero-tournament:v1.0.0
+docker run -d --name sphero-tournament --restart unless-stopped -p 8080:80 \
+  yourname/sphero-tournament:v1.0.0
+```
+
+Every push from `scripts/docker-build-push.sh` publishes an immutable tag alongside `:latest` — either the short git SHA or the version you passed. That tag is the one to deploy, because it always names the same image.
+
+### Updating
+
+Docker will not replace a running container on its own. Pull the new image, then recreate:
+
+```bash
+docker pull yourname/sphero-tournament:latest
+docker rm -f sphero-tournament
+docker run -d \
+  --name sphero-tournament \
+  --restart unless-stopped \
+  -p 8080:80 \
+  yourname/sphero-tournament:latest
+```
+
+Nothing is lost in the swap. The container is stateless — tournaments live in the browser's `localStorage` on whichever machine runs the event, not on the server. The people using the app keep their in-progress bracket across a redeploy.
+
+Reclaim the disk the old image was using:
+
+```bash
+docker image prune -f
+```
+
+### Rolling back
+
+Because old tags stay on Docker Hub, reverting is the same command with an earlier tag:
+
+```bash
+docker rm -f sphero-tournament
+docker run -d --name sphero-tournament --restart unless-stopped -p 8080:80 \
+  yourname/sphero-tournament:<previous-tag>
+```
+
+### Useful commands
+
+```bash
+docker logs -f sphero-tournament          # nginx access and error logs
+docker restart sphero-tournament          # restart without recreating
+docker stop sphero-tournament             # stop, keep the container
+docker rm -f sphero-tournament            # remove entirely
+docker exec -it sphero-tournament sh      # shell inside the container
+```
 
 ---
 
