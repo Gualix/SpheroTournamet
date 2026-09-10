@@ -1,0 +1,32 @@
+# Host nginx server block for Sphero Tournament — template.
+#
+# __DOMAIN__ and __UPSTREAM__ are substituted by scripts/setup-nginx.sh
+# from the values in .env. Do not edit the rendered copy in
+# /etc/nginx/sites-available directly; change .env and re-run the script,
+# or certbot's TLS additions will be overwritten on the next run.
+#
+# This is the nginx that runs ON the host and owns the domain, the
+# certificate, and ports 80/443. It is NOT the nginx inside the container
+# — that one (../../nginx.conf) serves the built files and is untouched.
+#
+# HTTP only on purpose: certbot needs port 80 reachable to validate the
+# domain, and it adds the TLS server block and redirect itself.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __DOMAIN__;
+
+    # Upstream is the container, bound to loopback so it cannot be reached
+    # directly from outside. See HOST_BIND in docker-compose.yml.
+    location / {
+        proxy_pass http://__UPSTREAM__;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+    }
+}
