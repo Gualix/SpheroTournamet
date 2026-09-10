@@ -202,6 +202,135 @@ docker run -d \
 
 The app is then on port 8080. The image declares a healthcheck, so `docker ps` reports container health once the first probe completes.
 
+On a host that does not have Docker yet, start with [Setting up an Ubuntu host](#setting-up-an-ubuntu-host) below.
+
+---
+
+## Setting up an Ubuntu host
+
+On an x86 Ubuntu server you do **not** need buildx, QEMU, or cross-compilation. The host is already `linux/amd64`, so a plain `docker build` produces the right image. All the `--platform` machinery above exists solely so an Apple Silicon Mac can emit an amd64 image.
+
+### 1. Install Docker
+
+Ubuntu's own `docker.io` package lags well behind. Use Docker's official repository.
+
+Remove conflicting packages:
+
+```bash
+for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
+  sudo apt-get remove -y $pkg
+done
+```
+
+Add Docker's GPG key and repository:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+```
+
+Install the engine, CLI, and plugins:
+
+```bash
+sudo apt-get install -y \
+  docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin
+```
+
+`docker-buildx-plugin` is what provides the `docker buildx` subcommand — it is a plugin to the Docker CLI, not a separate product.
+
+### 2. Post-install
+
+Run Docker without `sudo`:
+
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+`newgrp` applies the group to the current shell. Over SSH, log out and back in — otherwise every command fails with `permission denied on /var/run/docker.sock`.
+
+Start Docker on boot:
+
+```bash
+sudo systemctl enable --now docker
+```
+
+Verify:
+
+```bash
+docker run --rm hello-world
+docker buildx version
+docker --version
+```
+
+### 3. Clone and build
+
+```bash
+git clone https://github.com/Gualix/SpheroTournamet.git
+cd SpheroTournamet
+
+docker build -t sphero-tournament:latest .
+```
+
+No `--platform` flag and no builder setup. BuildKit is the default in current Docker releases, so `$BUILDPLATFORM` in the Dockerfile resolves to the host's own architecture. First build takes a few minutes, most of it `bun install`.
+
+Confirm the result:
+
+```bash
+docker image inspect sphero-tournament:latest --format '{{.Os}}/{{.Architecture}}'   # linux/amd64
+docker images sphero-tournament                                                      # ~74MB
+```
+
+### 4. Run it
+
+```bash
+docker run -d \
+  --name sphero-tournament \
+  --restart unless-stopped \
+  -p 8080:80 \
+  sphero-tournament:latest
+
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/
+```
+
+Open the firewall if the app needs to be reachable from other machines:
+
+```bash
+sudo ufw allow 8080/tcp        # only if ufw is active
+```
+
+Then browse to `http://<server-ip>:8080`.
+
+### Ports
+
+`EXPOSE 80` in the Dockerfile is **documentation only** — it does not publish anything. The port reaches the host only via `-p` at run time, read as `host:container`. A container started without `-p` runs perfectly well and is simply unreachable, showing an empty `PORTS` column in `docker ps`.
+
+Port mappings are fixed when a container is created and cannot be changed afterwards. To add or change one, remove and recreate the container:
+
+```bash
+docker rm -f sphero-tournament
+docker run -d --name sphero-tournament --restart unless-stopped -p 8080:80 sphero-tournament:latest
+```
+
+Nothing is lost — tournament state lives in the browser's `localStorage`, not in the container.
+
+If `curl` on the host returns 200 but a browser elsewhere cannot connect, Docker is fine and the block is the firewall or cloud security group.
+
+### Build on the host, or pull from Docker Hub?
+
+Building on the host means you never push or pull — clone, build, run. Pulling a prebuilt image is the better choice when you want the identical verified artifact across several machines, or when the server is too small to run `bun install` comfortably.
+
 ---
 
 ## A note on `GEMINI_API_KEY`
