@@ -347,13 +347,35 @@ Docker, and nothing else. If the host does not have it, follow [Install Docker](
 docker pull yourname/sphero-tournament:latest
 ```
 
-If the Docker Hub repository is private, authenticate first:
+Public repositories need no login at all. If the repository is private, authenticate first — interactively:
 
 ```bash
 docker login -u yourname
 ```
 
-Public repositories need no login at all.
+Docker will prompt for the password or access token.
+
+**Or non-interactively with environment variables**, which is what you want for a provisioning script, CI job, or anything unattended:
+
+```bash
+export DOCKERHUB_USER=yourname
+export DOCKERHUB_TOKEN=dckr_pat_xxxxx
+
+printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
+```
+
+| Variable | Meaning |
+|---|---|
+| `DOCKERHUB_USER` | Docker Hub username — the account name, not the email |
+| `DOCKERHUB_TOKEN` | Access token from **Account Settings → Personal access tokens** |
+
+Use an access token rather than your account password: tokens are scoped, individually revocable, and survive enabling 2FA. Read-only scope is enough for pulling.
+
+`--password-stdin` keeps the secret out of your shell history and out of the process list, where a plain `docker login -p <token>` would expose it to every other user on the machine. The `printf` avoids the trailing newline that `echo` would append.
+
+Credentials are stored afterwards in `~/.docker/config.json` — base64-encoded, not encrypted — so on a shared host, `docker logout` once the pull is done.
+
+The same two variables drive [`scripts/docker-build-push.sh`](scripts/docker-build-push.sh), so exporting them once covers both pulling and pushing.
 
 ### 2. Run it
 
@@ -475,6 +497,8 @@ docker compose down           # stop and remove
 ```
 
 Updating is the two-step `pull` then `up -d`. Compose notices the image changed and recreates the container; without the `pull` it will happily keep running the old one.
+
+If the image is private, `docker compose pull` uses the same credentials as `docker pull` — run the [login step](#1-pull-the-image) once on the host first.
 
 To build from source rather than pull, uncomment `build: .` in the file and run `docker compose up -d --build`. That needs the full repository checked out, not just the Compose file.
 
