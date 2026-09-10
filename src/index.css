@@ -1,0 +1,133 @@
+@import "tailwindcss";
+
+@keyframes pulseGlow {
+  0%, 100% {
+    filter: drop-shadow(0 0 6px rgba(6, 182, 212, 0.7)) drop-shadow(0 0 12px rgba(236, 72, 153, 0.5));
+    opacity: 0.9;
+  }
+  50% {
+    filter: drop-shadow(0 0 16px rgba(6, 182, 212, 1)) drop-shadow(0 0 24px rgba(236, 72, 153, 0.9));
+    opacity: 1;
+  }
+}
+
+@keyframes electricGold {
+  0% {
+    stroke-dashoffset: 40;
+    filter: drop-shadow(0 0 8px rgba(234, 179, 8, 0.8)) drop-shadow(0 0 16px rgba(245, 158, 11, 0.6));
+  }
+  50% {
+    filter: drop-shadow(0 0 18px rgba(250, 204, 21, 1)) drop-shadow(0 0 28px rgba(234, 179, 8, 0.9));
+  }
+  100% {
+    stroke-dashoffset: 0;
+    filter: drop-shadow(0 0 8px rgba(234, 179, 8, 0.8)) drop-shadow(0 0 16px rgba(245, 158, 11, 0.6));
+  }
+}
+
+@keyframes trophyFloat {
+  0%, 100% {
+    transform: translateY(0px) scale(1);
+  }
+  50% {
+    transform: translateY(-8px) scale(1.04);
+  }
+}
+
+@keyframes rotateConcentric {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 2.5s ease-in-out infinite;
+}
+
+.animate-electric-gold {
+  animation: electricGold 1.8s linear infinite;
+}
+
+.animate-trophy-float {
+  animation: trophyFloat 3s ease-in-out infinite;
+}
+
+.animate-spin-slow {
+  animation: rotateConcentric 60s linear infinite;
+}
+
+/* Custom dark glassmorphism scrollbar */
+.custom-scrollbar::-webkit-scrollbar,
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track,
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+}
+.custom-scrollbar::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.4);
+  border-radius: 9999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(6, 182, 212, 0.6);
+}
+
+/* Atmospheric Mesh Gradients Keyframes */
+@keyframes meshDrift1 {
+  0% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  50% {
+    transform: translate(60px, -40px) scale(1.15);
+  }
+  100% {
+    transform: translate(-40px, 50px) scale(0.95);
+  }
+}
+
+@keyframes meshDrift2 {
+  0% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  50% {
+    transform: translate(-70px, 60px) scale(1.1);
+  }
+  100% {
+    transform: translate(50px, -50px) scale(1.05);
+  }
+}
+
+@keyframes meshDrift3 {
+  0% {
+    transform: translate(0px, 0px) scale(0.9);
+    opacity: 0.25;
+  }
+  50% {
+    transform: translate(40px, 40px) scale(1.18);
+    opacity: 0.45;
+  }
+  100% {
+    transform: translate(-50px, -30px) scale(0.95);
+    opacity: 0.25;
+  }
+}
+
+.animate-mesh-1 {
+  animation: meshDrift1 26s ease-in-out infinite alternate;
+}
+
+.animate-mesh-2 {
+  animation: meshDrift2 34s ease-in-out infinite alternate;
+}
+
+.animate-mesh-3 {
+  animation: meshDrift3 28s ease-in-out infinite alternate;
+}
+

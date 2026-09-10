@@ -1,0 +1,6 @@
+{
+  "name": "Sphero Tournament",
+  "description": "Sphero Tournament bracket and live duel manager. Developed for STEM Pillar by Akamai Costa Rica.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
