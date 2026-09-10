@@ -79,6 +79,13 @@ bun run clean      # remove dist/
 ## Project layout
 
 ```
+deploy/
+├── .env.example                 # Compose variables, documented
+└── nginx/
+    └── sphero.dannyslab.com.conf    # Host nginx server block
+scripts/
+├── docker-build-push.sh         # Build and publish the image
+└── deploy.sh                    # Pull and restart on the server
 src/
 ├── App.tsx                  # Root component and tournament state machine
 ├── main.tsx                 # Entry point
@@ -486,6 +493,35 @@ docker compose up -d
 | `TAG` | `latest` | Image tag; pin a real version in production |
 | `HOST_PORT` | `8080` | Port on the host |
 | `HOST_BIND` | `0.0.0.0` | Interface to bind; set to `127.0.0.1` behind a reverse proxy |
+| `PLATFORM` | `linux/amd64` | Image platform; the published image is amd64 only |
+
+### Deployment files
+
+Everything a server needs lives in these four files:
+
+| File | Purpose |
+|---|---|
+| [`docker-compose.yml`](docker-compose.yml) | Runs the published image; reads `IMAGE`, `TAG`, `HOST_PORT`, `HOST_BIND`, `PLATFORM` |
+| [`deploy/.env.example`](deploy/.env.example) | Template for those variables — `cp deploy/.env.example .env` |
+| [`deploy/nginx/sphero.dannyslab.com.conf`](deploy/nginx/sphero.dannyslab.com.conf) | Host nginx server block for the domain |
+| [`scripts/deploy.sh`](scripts/deploy.sh) | Pull a new image and restart, with a health check |
+
+A pull-only host needs no source checkout — `docker-compose.yml` and `.env` are enough, plus the nginx file if you are terminating TLS.
+
+### Redeploying
+
+```bash
+./scripts/deploy.sh              # deploy whatever TAG is in .env
+./scripts/deploy.sh v1.2.0       # deploy a specific tag
+```
+
+It prints what is running, pulls, recreates the container only if the image actually changed, then curls the app to confirm it came back. An explicit tag argument overrides `.env`.
+
+The equivalent by hand is `docker compose pull && docker compose up -d`.
+
+### A note on `PLATFORM`
+
+The published image is `linux/amd64` only, so `docker-compose.yml` pins `platform: ${PLATFORM:-linux/amd64}`. On an amd64 server that changes nothing. On an arm64 machine — an Apple Silicon Mac testing the Compose setup — it is what allows the image to pull and run at all, under emulation; without it Docker reports `no matching manifest for linux/arm64`.
 
 ### Compose commands
 
@@ -558,12 +594,10 @@ With a proxy in front, the container should no longer be reachable from outside.
 HOST_BIND=127.0.0.1 IMAGE=gualix/sphero-tournament docker compose up -d
 ```
 
-Or in `.env`:
+Or copy the ready-made template, which documents every variable:
 
-```
-IMAGE=gualix/sphero-tournament
-HOST_BIND=127.0.0.1
-HOST_PORT=8080
+```bash
+cp deploy/.env.example .env
 ```
 
 Confirm the binding changed:
@@ -587,25 +621,18 @@ This is the distribution's nginx running directly on the host, unrelated to the 
 
 ### 4. Add the server block
 
+The server block ships in this repository as [`deploy/nginx/sphero.dannyslab.com.conf`](deploy/nginx/sphero.dannyslab.com.conf), so copy it rather than retyping it:
+
 ```bash
-sudo tee /etc/nginx/sites-available/sphero.dannyslab.com > /dev/null <<'EOF'
-server {
-    listen 80;
-    listen [::]:80;
-    server_name sphero.dannyslab.com;
+sudo cp deploy/nginx/sphero.dannyslab.com.conf \
+  /etc/nginx/sites-available/sphero.dannyslab.com
+```
 
-    location / {
-        proxy_pass http://127.0.0.1:8080;
+On a host without the repository checked out, fetch just that file:
 
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        proxy_http_version 1.1;
-    }
-}
-EOF
+```bash
+sudo curl -o /etc/nginx/sites-available/sphero.dannyslab.com \
+  https://raw.githubusercontent.com/Gualix/SpheroTournamet/main/deploy/nginx/sphero.dannyslab.com.conf
 ```
 
 Enable it, drop the default site, and reload:

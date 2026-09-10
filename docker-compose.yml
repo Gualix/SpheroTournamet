@@ -8,7 +8,7 @@
 #
 # Override any value without editing this file, either inline:
 #
-#   IMAGE=acme/sphero-tournament TAG=v1.0.0 HOST_PORT=80 docker compose up -d
+#   IMAGE=gualix/sphero-tournament TAG=v1.0.0 HOST_PORT=80 docker compose up -d
 #
 # or by creating a .env file next to this one:
 #
@@ -19,8 +19,13 @@
 
 services:
   app:
-    image: ${IMAGE:-yourname/sphero-tournament}:${TAG:-latest}
+    image: ${IMAGE:-gualix/sphero-tournament}:${TAG:-latest}
     container_name: sphero-tournament
+
+    # The published image is linux/amd64 only. On an amd64 server this is a
+    # no-op; on an arm64 machine (Apple Silicon) it is what lets the image
+    # pull and run at all, under emulation.
+    platform: ${PLATFORM:-linux/amd64}
     restart: unless-stopped
     ports:
       # HOST_BIND defaults to all interfaces, so the app is reachable directly
