@@ -121,6 +121,7 @@ nginx is configured with SPA history fallback, gzip, and immutable caching on ha
 | Build the image and publish it to Docker Hub | [Quick path](#quick-path) / [Manual path](#manual-path) below |
 | Run the app on a server, pulling a published image | [Running from Docker Hub only](#running-from-docker-hub-only), or [with Docker Compose](#using-docker-compose-instead) |
 | Set up a fresh Ubuntu box, or build on the server itself | [Setting up an Ubuntu host](#setting-up-an-ubuntu-host) |
+| Serve it at a real domain over HTTPS | [Serving it at a domain with HTTPS](#serving-it-at-a-domain-with-https) |
 
 ### Quick path
 
@@ -484,6 +485,7 @@ docker compose up -d
 | `IMAGE` | `yourname/sphero-tournament` | Docker Hub repository |
 | `TAG` | `latest` | Image tag; pin a real version in production |
 | `HOST_PORT` | `8080` | Port on the host |
+| `HOST_BIND` | `0.0.0.0` | Interface to bind; set to `127.0.0.1` behind a reverse proxy |
 
 ### Compose commands
 
@@ -511,6 +513,220 @@ docker stop sphero-tournament             # stop, keep the container
 docker rm -f sphero-tournament            # remove entirely
 docker exec -it sphero-tournament sh      # shell inside the container
 ```
+
+---
+
+## Serving it at a domain with HTTPS
+
+Running the container publishes the app on a raw port — `http://<server-ip>:8080`. To reach it at `https://sphero.dannyslab.com` instead, put nginx on the host in front of the container and terminate TLS there.
+
+```
+browser ──443/TLS──► host nginx ──HTTP──► 127.0.0.1:8080 ──► container nginx ──► static files
+```
+
+Two separate nginx instances, doing different jobs. The one **inside** the image serves the built files and handles SPA routing; you do not touch it. The one on the **host** owns the domain, the certificate, and ports 80 and 443. Nothing about the image or the Compose file changes except which interface the container binds to.
+
+### 1. Point DNS at the server
+
+Get the server's public address:
+
+```bash
+curl -4 -s ifconfig.me
+```
+
+In the DNS control panel for `dannyslab.com`, add:
+
+| Type | Name | Value | TTL |
+|---|---|---|---|
+| `A` | `sphero` | your server's public IPv4 | 300 |
+
+The record name is just `sphero` — most panels append the zone, giving `sphero.dannyslab.com`. If yours wants the full name, enter that instead. Add a matching `AAAA` record if the server has public IPv6.
+
+Wait for it to resolve before going further, because certificate issuance depends on it:
+
+```bash
+dig +short sphero.dannyslab.com
+```
+
+That must print your server's IP. A short TTL of 300 keeps mistakes cheap to correct. If the domain sits behind Cloudflare, set the record to **DNS only** (grey cloud) until the certificate is issued — the orange-cloud proxy intercepts the HTTP validation request.
+
+### 2. Bind the container to localhost
+
+With a proxy in front, the container should no longer be reachable from outside. Otherwise `http://<server-ip>:8080` keeps serving the app unencrypted, bypassing everything you are about to set up.
+
+```bash
+HOST_BIND=127.0.0.1 IMAGE=gualix/sphero-tournament docker compose up -d
+```
+
+Or in `.env`:
+
+```
+IMAGE=gualix/sphero-tournament
+HOST_BIND=127.0.0.1
+HOST_PORT=8080
+```
+
+Confirm the binding changed:
+
+```bash
+docker compose ps --format 'table {{.Name}}\t{{.Ports}}'
+# want:  127.0.0.1:8080->80/tcp
+# not:   0.0.0.0:8080->80/tcp
+```
+
+Running with plain `docker run` instead of Compose, the equivalent is `-p 127.0.0.1:8080:80`.
+
+### 3. Install nginx
+
+```bash
+sudo apt-get update
+sudo apt-get install -y nginx
+```
+
+This is the distribution's nginx running directly on the host, unrelated to the nginx inside the container.
+
+### 4. Add the server block
+
+```bash
+sudo tee /etc/nginx/sites-available/sphero.dannyslab.com > /dev/null <<'EOF'
+server {
+    listen 80;
+    listen [::]:80;
+    server_name sphero.dannyslab.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+    }
+}
+EOF
+```
+
+Enable it, drop the default site, and reload:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/sphero.dannyslab.com /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Always run `nginx -t` before reloading. A syntax error caught there is harmless; the same error found during a reload takes the site down.
+
+Start with HTTP only. Certbot needs port 80 reachable to prove you control the name, and it will add the TLS configuration itself in the next step.
+
+### 5. Open the firewall
+
+```bash
+sudo ufw allow 'Nginx Full'      # opens 80 and 443
+sudo ufw delete allow 8080/tcp   # if you opened it earlier
+sudo ufw status
+```
+
+Port 8080 no longer needs to be open — the container listens only on loopback now, and traffic arrives through nginx.
+
+Check the plain-HTTP path works before requesting a certificate:
+
+```bash
+curl -I http://sphero.dannyslab.com
+```
+
+A `200` means DNS, firewall, nginx, and the container are all correct. Fix any failure here first — certificate issuance will not succeed until this does.
+
+### 6. Issue the certificate
+
+```bash
+sudo apt-get install -y certbot python3-certbot-nginx
+
+sudo certbot --nginx -d sphero.dannyslab.com
+```
+
+Certbot asks for an email for expiry warnings, then validates the domain over port 80 and edits the server block in place. Choose the redirect option when offered, so HTTP traffic is sent to HTTPS.
+
+Certificates come from Let's Encrypt and are free. Validation requires that port 80 is open and DNS already resolves — which is why those came first.
+
+### 7. What you end up with
+
+Certbot rewrites the file to roughly this:
+
+```nginx
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name sphero.dannyslab.com;
+
+    ssl_certificate     /etc/letsencrypt/live/sphero.dannyslab.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/sphero.dannyslab.com/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+    }
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name sphero.dannyslab.com;
+    return 301 https://$host$request_uri;
+}
+```
+
+Verify:
+
+```bash
+curl -I https://sphero.dannyslab.com          # 200
+curl -I http://sphero.dannyslab.com           # 301 to https
+```
+
+Then open `https://sphero.dannyslab.com` and confirm the padlock.
+
+### Renewal
+
+The certbot package installs a systemd timer that renews automatically, roughly 30 days before expiry. Confirm it is active and that renewal actually works:
+
+```bash
+systemctl list-timers | grep certbot
+sudo certbot renew --dry-run
+```
+
+The dry run exercises the full renewal against Let's Encrypt's staging environment without touching your real certificate. If it passes, renewal is genuinely automatic and there is nothing to remember. Let's Encrypt certificates last 90 days, so a silent failure surfaces as an expired site — the dry run is what tells you in advance.
+
+### Updating the app afterwards
+
+The proxy and certificate are independent of the container. Updating stays exactly the same:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+nginx keeps proxying to `127.0.0.1:8080` throughout. There is no need to touch the certificate or reload nginx.
+
+### Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| `502 Bad Gateway` | Container is not running, or not on `127.0.0.1:8080`. Check `docker compose ps`. |
+| Certbot fails to validate | DNS not resolving yet, port 80 closed, or Cloudflare proxying is on. |
+| Site works on IP:8080 but not the domain | DNS has not propagated, or `server_name` does not match. |
+| Still reachable on `:8080` | `HOST_BIND` was not applied — recreate the container, mappings are fixed at creation. |
+| `nginx -t` fails after editing | Fix before reloading; the running config stays live until a successful reload. |
 
 ---
 
