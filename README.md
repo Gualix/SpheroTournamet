@@ -520,7 +520,41 @@ All of them are driven by one `.env`, copied from [`deploy/.env.example`](deploy
 | `HOST_BIND` | `0.0.0.0` | Compose | Set to `127.0.0.1` behind the proxy |
 | `PLATFORM` | `linux/amd64` | Compose | Image platform; published image is amd64 only |
 
-A pull-only host needs no source checkout — `docker-compose.yml` and `.env` are enough, plus the nginx file if you are terminating TLS.
+A pull-only host needs no source checkout — `docker-compose.yml` and `.env` are enough, plus the nginx template and `setup-nginx.sh` if you are terminating TLS. See [Fetching them without a clone](#fetching-them-without-a-clone).
+
+### Fetching them without a clone
+
+A server does not need the source tree — only these five files. Fetch them in one go:
+
+```bash
+mkdir -p ~/sphero/deploy/nginx ~/sphero/scripts && cd ~/sphero
+
+BASE=https://raw.githubusercontent.com/Gualix/SpheroTournamet/main
+
+curl -fsSL -o docker-compose.yml                 "$BASE/docker-compose.yml"
+curl -fsSL -o deploy/.env.example                "$BASE/deploy/.env.example"
+curl -fsSL -o deploy/nginx/site.conf.template    "$BASE/deploy/nginx/site.conf.template"
+curl -fsSL -o scripts/setup-nginx.sh             "$BASE/scripts/setup-nginx.sh"
+curl -fsSL -o scripts/deploy.sh                  "$BASE/scripts/deploy.sh"
+
+chmod +x scripts/*.sh
+cp deploy/.env.example .env
+```
+
+**Keep the directory structure.** `scripts/setup-nginx.sh` resolves its template as `deploy/nginx/site.conf.template` relative to the directory above `scripts/`. Downloading everything flat into one folder makes it fail with `Template not found`.
+
+`-fsSL` matters too: without `-f`, curl writes GitHub's 404 page into the file and the failure only surfaces later as a confusing syntax error.
+
+Then edit `.env` — at minimum `DOMAIN`, `LETSENCRYPT_EMAIL`, and `HOST_BIND=127.0.0.1` if nginx will sit in front — and carry on with [Running from Docker Hub only](#running-from-docker-hub-only).
+
+Only running the container, with no reverse proxy? Two files are enough:
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/Gualix/SpheroTournamet/main/docker-compose.yml
+curl -fsSL -o .env https://raw.githubusercontent.com/Gualix/SpheroTournamet/main/deploy/.env.example
+```
+
+To pull from a branch rather than `main`, swap the `main` segment of the URL for the branch name.
 
 ### Redeploying
 
